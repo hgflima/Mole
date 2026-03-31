@@ -68,6 +68,7 @@ type MetricsSnapshot struct {
 
 	CPU            CPUStatus          `json:"cpu"`
 	GPU            []GPUStatus        `json:"gpu"`
+	GPUHistory     GPUHistory         `json:"gpu_history"`
 	Memory         MemoryStatus       `json:"memory"`
 	Disks          []DiskStatus       `json:"disks"`
 	DiskIO         DiskIOStatus       `json:"disk_io"`
@@ -163,6 +164,13 @@ type NetworkHistory struct {
 
 const NetworkHistorySize = 120 // Increased history size for wider graph
 
+// GPUHistory holds the global GPU usage history for sparkline rendering.
+type GPUHistory struct {
+	UsageHistory []float64 `json:"usage_history"`
+}
+
+const GPUHistorySize = 120
+
 type ProxyStatus struct {
 	Enabled bool   `json:"enabled"`
 	Type    string `json:"type"` // HTTP, HTTPS, SOCKS, PAC, WPAD, TUN
@@ -214,9 +222,10 @@ type Collector struct {
 	// Fast metrics (1s).
 	prevNet      map[string]net.IOCountersStat
 	lastNetAt    time.Time
-	rxHistoryBuf *RingBuffer
-	txHistoryBuf *RingBuffer
-	lastGPUAt    time.Time
+	rxHistoryBuf       *RingBuffer
+	txHistoryBuf       *RingBuffer
+	gpuUsageHistoryBuf *RingBuffer
+	lastGPUAt          time.Time
 	cachedGPU    []GPUStatus
 	prevDiskIO   disk.IOCountersStat
 	lastDiskAt   time.Time
@@ -228,9 +237,10 @@ type Collector struct {
 
 func NewCollector(options ProcessWatchOptions) *Collector {
 	return &Collector{
-		prevNet:        make(map[string]net.IOCountersStat),
-		rxHistoryBuf:   NewRingBuffer(NetworkHistorySize),
-		txHistoryBuf:   NewRingBuffer(NetworkHistorySize),
+		prevNet:            make(map[string]net.IOCountersStat),
+		rxHistoryBuf:       NewRingBuffer(NetworkHistorySize),
+		txHistoryBuf:       NewRingBuffer(NetworkHistorySize),
+		gpuUsageHistoryBuf: NewRingBuffer(GPUHistorySize),
 		processWatch:   options.SnapshotConfig(),
 		processWatcher: NewProcessWatcher(options),
 	}
@@ -338,6 +348,11 @@ func (c *Collector) Collect() (MetricsSnapshot, error) {
 	}
 	c.watchMu.Unlock()
 
+	// Accumulate GPU usage history for sparkline.
+	if len(gpuStats) > 0 && gpuStats[0].Usage >= 0 {
+		c.gpuUsageHistoryBuf.Add(gpuStats[0].Usage)
+	}
+
 	return MetricsSnapshot{
 		CollectedAt:    now,
 		Host:           hostInfo.Hostname,
@@ -349,6 +364,9 @@ func (c *Collector) Collect() (MetricsSnapshot, error) {
 		HealthScoreMsg: scoreMsg,
 		CPU:            cpuStats,
 		GPU:            gpuStats,
+		GPUHistory: GPUHistory{
+			UsageHistory: c.gpuUsageHistoryBuf.Slice(),
+		},
 		Memory:         memStats,
 		Disks:          diskStats,
 		DiskIO:         diskIO,

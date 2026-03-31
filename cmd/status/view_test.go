@@ -1181,6 +1181,253 @@ func TestModelViewErrorRendersSingleMole(t *testing.T) {
 	}
 }
 
+// --- GPU Card Tests ---
+
+func TestRenderGPUCardEmpty(t *testing.T) {
+	card := renderGPUCard(nil, GPUHistory{})
+
+	if card.icon != iconGPU {
+		t.Fatalf("icon = %q, want %q", card.icon, iconGPU)
+	}
+	if card.title != "GPU" {
+		t.Fatalf("title = %q, want %q", card.title, "GPU")
+	}
+	if len(card.lines) != 1 {
+		t.Fatalf("expected 1 line for empty GPU, got %d", len(card.lines))
+	}
+	plain := stripANSI(card.lines[0])
+	if plain != "No GPU detected" {
+		t.Fatalf("empty GPU line = %q, want %q", plain, "No GPU detected")
+	}
+}
+
+func TestRenderGPUCardAppleSilicon(t *testing.T) {
+	card := renderGPUCard([]GPUStatus{{
+		Name:      "Apple M4 Pro",
+		Usage:     -1,
+		CoreCount: 20,
+		Note:      "VRAM 24GB · Metal · Apple",
+	}}, GPUHistory{})
+
+	if card.title != "GPU" {
+		t.Fatalf("title = %q, want %q", card.title, "GPU")
+	}
+
+	joined := stripANSI(strings.Join(card.lines, "\n"))
+
+	// Model name, core count, and note should NOT appear (already in header).
+	if strings.Contains(joined, "Apple M4 Pro") {
+		t.Fatalf("GPU name should not appear in card (shown in header): %q", joined)
+	}
+	if strings.Contains(joined, "20 cores") {
+		t.Fatalf("core count should not appear in card (shown in header): %q", joined)
+	}
+	// Should show "Used" label with N/A.
+	if !strings.Contains(joined, "N/A") {
+		t.Fatalf("usage -1 should show N/A, got: %q", joined)
+	}
+	if !strings.Contains(joined, "Used") {
+		t.Fatalf("should use 'Used' label, got: %q", joined)
+	}
+}
+
+func TestRenderGPUCardWithUsage(t *testing.T) {
+	card := renderGPUCard([]GPUStatus{{
+		Name:      "Apple M2 Max",
+		Usage:     42.5,
+		CoreCount: 38,
+	}}, GPUHistory{})
+
+	joined := stripANSI(strings.Join(card.lines, "\n"))
+
+	if !strings.Contains(joined, "42.5%") {
+		t.Fatalf("expected usage percentage in output: %q", joined)
+	}
+	if !strings.Contains(joined, "Used") {
+		t.Fatalf("should use 'Used' label: %q", joined)
+	}
+	for _, line := range card.lines {
+		plain := stripANSI(line)
+		if strings.Contains(plain, "42.5%") {
+			if !strings.ContainsAny(plain, "█░") {
+				t.Fatalf("usage line missing progress bar: %q", plain)
+			}
+			break
+		}
+	}
+}
+
+func TestRenderGPUCardNVIDIAWithMemory(t *testing.T) {
+	card := renderGPUCard([]GPUStatus{{
+		Name:        "NVIDIA GeForce RTX 4090",
+		Usage:       75.3,
+		MemoryUsed:  18432,
+		MemoryTotal: 24576,
+	}}, GPUHistory{})
+
+	joined := stripANSI(strings.Join(card.lines, "\n"))
+
+	// Model name should NOT appear.
+	if strings.Contains(joined, "RTX 4090") {
+		t.Fatalf("GPU name should not appear in card: %q", joined)
+	}
+	if !strings.Contains(joined, "75.3%") {
+		t.Fatalf("missing usage in output: %q", joined)
+	}
+	if !strings.Contains(joined, "VRAM") {
+		t.Fatalf("missing VRAM line in output: %q", joined)
+	}
+	if !strings.Contains(joined, "18.0/24.0 GB") {
+		t.Fatalf("VRAM should be formatted as GB: %q", joined)
+	}
+}
+
+func TestRenderGPUCardMultipleGPUs(t *testing.T) {
+	card := renderGPUCard([]GPUStatus{
+		{
+			Name:      "Apple M1 Pro",
+			Usage:     30.0,
+			CoreCount: 16,
+		},
+		{
+			Name:      "Intel UHD Graphics",
+			Usage:     -1,
+			CoreCount: 0,
+		},
+	}, GPUHistory{})
+
+	joined := stripANSI(strings.Join(card.lines, "\n"))
+
+	// Should use GPU1/GPU2 labels WITHOUT model names.
+	if !strings.Contains(joined, "GPU1") {
+		t.Fatalf("missing GPU1 label: %q", joined)
+	}
+	if !strings.Contains(joined, "GPU2") {
+		t.Fatalf("missing GPU2 label: %q", joined)
+	}
+	if strings.Contains(joined, "Apple M1 Pro") {
+		t.Fatalf("GPU model name should not appear in card: %q", joined)
+	}
+	if strings.Contains(joined, "Intel UHD") {
+		t.Fatalf("GPU model name should not appear in card: %q", joined)
+	}
+}
+
+func TestRenderGPUCardNoModelName(t *testing.T) {
+	card := renderGPUCard([]GPUStatus{{
+		Name:      "NVIDIA GeForce RTX 4090 Founders Edition",
+		Usage:     50.0,
+		CoreCount: 0,
+		Note:      "VRAM 24GB · Metal",
+	}}, GPUHistory{})
+
+	joined := stripANSI(strings.Join(card.lines, "\n"))
+
+	// Single GPU should not show model name, core count, or note.
+	if strings.Contains(joined, "NVIDIA") {
+		t.Fatalf("GPU name should not appear in card: %q", joined)
+	}
+	if strings.Contains(joined, "VRAM 24GB · Metal") {
+		t.Fatalf("note should not appear in card: %q", joined)
+	}
+}
+
+func TestRenderGPUCardWithSparkline(t *testing.T) {
+	history := GPUHistory{
+		UsageHistory: []float64{10, 20, 30, 50, 70, 80, 60, 40, 20, 10, 30, 50, 70, 80, 60, 40},
+	}
+	card := renderGPUCard([]GPUStatus{{
+		Name:  "Apple M4 Max",
+		Usage: 42.5,
+	}}, history)
+
+	joined := stripANSI(strings.Join(card.lines, "\n"))
+
+	// Sparkline uses block characters ▁▂▃▄▅▆▇█.
+	hasSparkline := false
+	for _, line := range card.lines {
+		plain := stripANSI(line)
+		if strings.ContainsAny(plain, "▁▂▃▄▅▆▇█") && !strings.ContainsAny(plain, "░") {
+			hasSparkline = true
+			if !strings.HasPrefix(plain, "Hist") {
+				t.Fatalf("sparkline line should have 'Hist' label, got: %q", plain)
+			}
+			break
+		}
+	}
+	if !hasSparkline {
+		t.Fatalf("expected sparkline in output: %q", joined)
+	}
+}
+
+func TestRenderGPUCardSparklineEmpty(t *testing.T) {
+	card := renderGPUCard([]GPUStatus{{
+		Name:  "Apple M4 Max",
+		Usage: 42.5,
+	}}, GPUHistory{})
+
+	// With empty history, no sparkline line should appear.
+	for _, line := range card.lines {
+		plain := stripANSI(line)
+		// Sparkline chars without progress bar chars.
+		if strings.ContainsAny(plain, "▁▂▃▄▅▆▇") && !strings.ContainsAny(plain, "█░") {
+			t.Fatalf("sparkline should not appear with empty history: %q", plain)
+		}
+	}
+}
+
+func TestBuildCardsIncludesGPU(t *testing.T) {
+	m := MetricsSnapshot{
+		GPU: []GPUStatus{{Name: "Apple M4 Pro", Usage: -1, CoreCount: 20}},
+	}
+
+	cards := buildCards(m, 80)
+
+	gpuIdx := -1
+	cpuIdx := -1
+	memIdx := -1
+	for i, c := range cards {
+		switch c.title {
+		case "GPU":
+			gpuIdx = i
+		case "CPU":
+			cpuIdx = i
+		case "Memory":
+			memIdx = i
+		}
+	}
+
+	if gpuIdx == -1 {
+		t.Fatal("buildCards() missing GPU card")
+	}
+	if cpuIdx == -1 || memIdx == -1 {
+		t.Fatal("buildCards() missing CPU or Memory card")
+	}
+	if gpuIdx != cpuIdx+1 {
+		t.Fatalf("GPU card at index %d, expected right after CPU at index %d", gpuIdx, cpuIdx)
+	}
+	if memIdx != gpuIdx+1 {
+		t.Fatalf("Memory card at index %d, expected right after GPU at index %d", memIdx, gpuIdx)
+	}
+}
+
+func TestBuildCardsGPUCardWithEmptySlice(t *testing.T) {
+	m := MetricsSnapshot{}
+
+	cards := buildCards(m, 80)
+
+	found := false
+	for _, c := range cards {
+		if c.title == "GPU" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("buildCards() should include GPU card even with nil GPU slice")
+	}
+}
+
 func stripANSI(s string) string {
 	var result strings.Builder
 	i := 0

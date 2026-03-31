@@ -313,6 +313,54 @@ func renderCPUCard(cpu CPUStatus, thermal ThermalStatus) cardData {
 	return cardData{icon: iconCPU, title: "CPU", lines: lines}
 }
 
+func renderGPUCard(gpus []GPUStatus, history GPUHistory) cardData {
+	var lines []string
+
+	if len(gpus) == 0 {
+		lines = append(lines, subtleStyle.Render("No GPU detected"))
+		return cardData{icon: iconGPU, title: "GPU", lines: lines}
+	}
+
+	for i, g := range gpus {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+
+		// Used line with progress bar (or N/A).
+		label := "Used  "
+		if len(gpus) > 1 {
+			label = fmt.Sprintf("GPU%-3d", i+1)
+		}
+		if g.Usage >= 0 {
+			usageBar := progressBar(g.Usage)
+			lines = append(lines, fmt.Sprintf("%s %s  %5.1f%%", label, usageBar, g.Usage))
+		} else {
+			lines = append(lines, subtleStyle.Render(label+" N/A (requires sudo)"))
+		}
+
+		// Sparkline (only for first GPU, only when history available).
+		if i == 0 && len(history.UsageHistory) > 0 && g.Usage >= 0 {
+			gpuSparkline := sparkline(history.UsageHistory, g.Usage, 16)
+			lines = append(lines, fmt.Sprintf("Hist   %s", gpuSparkline))
+		}
+
+		// VRAM line (only when MemoryTotal > 0, typically NVIDIA).
+		if g.MemoryTotal > 0 {
+			vramPercent := (g.MemoryUsed / g.MemoryTotal) * 100.0
+			vramBar := progressBar(vramPercent)
+			var vramText string
+			if g.MemoryTotal >= 1024 {
+				vramText = fmt.Sprintf("%.1f/%.1f GB", g.MemoryUsed/1024, g.MemoryTotal/1024)
+			} else {
+				vramText = fmt.Sprintf("%.0f/%.0f MB", g.MemoryUsed, g.MemoryTotal)
+			}
+			lines = append(lines, fmt.Sprintf("VRAM   %s  %s", vramBar, vramText))
+		}
+	}
+
+	return cardData{icon: iconGPU, title: "GPU", lines: lines}
+}
+
 func renderMemoryCard(mem MemoryStatus, cardWidth int) cardData {
 	// Check if swap is being used (or at least allocated).
 	hasSwap := mem.SwapTotal > 0 || mem.SwapUsed > 0
@@ -481,6 +529,7 @@ func renderProcessCard(procs []ProcessInfo) cardData {
 func buildCards(m MetricsSnapshot, width int) []cardData {
 	cards := []cardData{
 		renderCPUCard(m.CPU, m.Thermal),
+		renderGPUCard(m.GPU, m.GPUHistory),
 		renderMemoryCard(m.Memory, width),
 		renderDiskCard(m.Disks, m.DiskIO),
 		renderBatteryCard(m.Batteries, m.Thermal),
