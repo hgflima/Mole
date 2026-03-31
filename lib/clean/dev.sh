@@ -87,11 +87,39 @@ clean_dev_npm() {
         # pnpm not installed or not usable, just clean the default store directory
         safe_clean "$pnpm_default_store"/* "pnpm store"
     fi
+    local bun_default_cache="$HOME/.bun/install/cache"
+    local bun_cache_path="$bun_default_cache"
+    if command -v bun > /dev/null 2>&1 && bun --version > /dev/null 2>&1; then
+        clean_tool_cache "bun cache" bun pm cache rm
+
+        start_section_spinner "Checking bun cache path..."
+        bun_cache_path=$(run_with_timeout 2 bun pm cache 2> /dev/null) || bun_cache_path=""
+        stop_section_spinner
+
+        if [[ -z "$bun_cache_path" || "$bun_cache_path" != /* ]]; then
+            bun_cache_path="$bun_default_cache"
+        fi
+
+        local bun_cache_path_normalized="${bun_cache_path%/}"
+        local bun_default_cache_normalized="${bun_default_cache%/}"
+        if [[ -d "$bun_cache_path_normalized" ]]; then
+            bun_cache_path_normalized=$(cd "$bun_cache_path_normalized" 2> /dev/null && pwd -P) || bun_cache_path_normalized="${bun_cache_path%/}"
+        fi
+        if [[ -d "$bun_default_cache_normalized" ]]; then
+            bun_default_cache_normalized=$(cd "$bun_default_cache_normalized" 2> /dev/null && pwd -P) || bun_default_cache_normalized="${bun_default_cache%/}"
+        fi
+
+        if [[ "$bun_cache_path_normalized" != "$bun_default_cache_normalized" ]]; then
+            safe_clean "$bun_default_cache"/* "Orphaned bun cache"
+        fi
+    else
+        safe_clean "$bun_default_cache"/* "Bun cache"
+    fi
+
     note_activity
     safe_clean ~/.tnpm/_cacache/* "tnpm cache directory"
     safe_clean ~/.tnpm/_logs/* "tnpm logs"
     safe_clean ~/.yarn/cache/* "Yarn cache"
-    safe_clean ~/.bun/install/cache/* "Bun cache"
 }
 # Python/pip ecosystem caches.
 clean_dev_python() {
@@ -225,36 +253,10 @@ check_rust_toolchains() {
 # Docker caches (guarded by daemon check).
 clean_dev_docker() {
     if command -v docker > /dev/null 2>&1; then
-        if [[ "$DRY_RUN" != "true" ]]; then
-            start_section_spinner "Checking Docker daemon..."
-            local docker_running=false
-            if run_with_timeout 3 docker info > /dev/null 2>&1; then
-                docker_running=true
-            fi
-            stop_section_spinner
-            if [[ "$docker_running" == "true" ]]; then
-                # Remove unused images, stopped containers, unused networks, and
-                # anonymous volumes in one pass. This maps better to the large
-                # reclaimable "docker system df" buckets users typically see.
-                # Skip if Docker paths are whitelisted: docker system prune operates
-                # through the daemon API and bypasses filesystem-level whitelist checks.
-                if is_path_whitelisted "$HOME/.docker" ||
-                    is_path_whitelisted "$HOME/Library/Containers/com.docker.docker" ||
-                    is_path_whitelisted "$HOME/Library/Group Containers/group.com.docker"; then
-                    echo -e "  ${GRAY}${ICON_WARNING}${NC} Docker unused data · skipped (whitelisted)"
-                    debug_log "Docker cleanup skipped: Docker paths found in whitelist"
-                else
-                    clean_tool_cache "Docker unused data" docker system prune -af --volumes
-                fi
-            else
-                echo -e "  ${GRAY}${ICON_WARNING}${NC} Docker unused data · skipped (daemon not running)"
-                note_activity
-                debug_log "Docker daemon not running, skipping Docker cache cleanup"
-            fi
-        else
-            note_activity
-            echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} Docker unused data · would clean"
-        fi
+        note_activity
+        echo -e "  ${GRAY}${ICON_WARNING}${NC} Docker unused data · skipped by default"
+        echo -e "  ${GRAY}${ICON_REVIEW}${NC} ${GRAY}Review: docker system df${NC}"
+        debug_log "Docker daemon-managed cleanup skipped by default"
     fi
     safe_clean ~/.docker/buildx/cache/* "Docker BuildX cache"
 }
@@ -972,6 +974,12 @@ clean_dev_jetbrains_toolbox() {
     _restore_whitelist
 }
 
+# JetBrains IDE logs are safe to rebuild, unlike some cache subtrees that can
+# invalidate IDE indexes and trigger expensive reindexing.
+clean_dev_jetbrains_logs() {
+    safe_clean ~/Library/Logs/JetBrains/* "JetBrains IDE logs"
+}
+
 # Other language tool caches.
 clean_dev_other_langs() {
     safe_clean ~/.bundle/cache/* "Ruby Bundler cache"
@@ -1108,6 +1116,7 @@ clean_developer_tools() {
     clean_dev_mobile
     clean_dev_jvm
     clean_dev_jetbrains_toolbox
+    clean_dev_jetbrains_logs
     clean_dev_other_langs
     clean_dev_cicd
     clean_dev_database
